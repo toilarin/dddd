@@ -228,6 +228,20 @@ app.post('/verify-captcha', (req, res) => {
     }
 });
 
+app.post('/check-captcha-status', (req, res) => {
+    const { discordId } = req.body;  // Nhận discordId từ thân yêu cầu
+
+    if (!discordId) {
+        return res.status(400).json({ success: false, message: 'discordId is required' });
+    }
+
+    if (captchaCompletedUsers.has(discordId)) {  // Kiểm tra nếu người dùng đã giải CAPTCHA
+        return res.status(200).json({ success: true, message: 'Captcha đã được giải.' });
+    } else {
+        return res.status(200).json({ success: false, message: 'Captcha chưa được giải.' });
+    }
+});
+
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
 });

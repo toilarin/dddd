@@ -178,23 +178,34 @@ app.post('/verify-captcha', (req, res) => {
         return res.status(400).json({ success: false, message: "Missing discordId or captchaText" });
     }
 
+    // Kiểm tra nếu không tồn tại CAPTCHA đã lưu
+    if (!captchaStore[discordId]) {
+        return res.status(400).json({ success: false, message: "Captcha not found. Please generate a new one." });
+    }
+
     // Kiểm tra nếu CAPTCHA đã hết hạn
     if (Date.now() > captchaExpiry[discordId]) {
-        return res.status(400).json({ success: false, message: "Captcha expired" });
+        return res.status(400).json({ success: false, message: "Captcha expired. Please request a new one." });
     }
 
     // Kiểm tra số lần thử CAPTCHA
     if (captchaAttempts[discordId] >= MAX_ATTEMPTS) {
-        return res.status(400).json({ success: false, message: "Max attempts exceeded" });
+        return res.status(400).json({ success: false, message: "Max attempts exceeded. Please request a new CAPTCHA." });
     }
 
-    // Kiểm tra CAPTCHA đã nhập
-    if (captchaText === captchaStore[discordId]) {
+    console.log(`CAPTCHA nhập: "${captchaText}", CAPTCHA lưu: "${captchaStore[discordId]}"`); // Debug
+
+    // Kiểm tra CAPTCHA (Loại bỏ khoảng trắng và kiểm tra không phân biệt hoa/thường)
+    if (captchaText.trim().toLowerCase() === captchaStore[discordId].trim().toLowerCase()) {
         captchaCompletedUsers.add(discordId);
-        res.json({ success: true, message: "Captcha verified successfully" });
+        delete captchaStore[discordId]; // Xóa CAPTCHA sau khi hoàn thành
+        delete captchaAttempts[discordId];
+        delete captchaExpiry[discordId];
+
+        return res.json({ success: true, message: "Captcha verified successfully" });
     } else {
         captchaAttempts[discordId]++;
-        res.status(400).json({ success: false, message: "Incorrect captcha" });
+        return res.status(400).json({ success: false, message: "Invalid captcha, please try again." });
     }
 });
 

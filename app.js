@@ -14,11 +14,6 @@ let captchaExpiry = {};  // Lưu trữ thời gian hết hạn của CAPTCHA
 
 const CAPTCHA_TIMEOUT = 6 * 60 * 60 * 1000;  // Thời gian hết hạn 6 giờ
 const MAX_ATTEMPTS = 3;  // Giới hạn số lần thử CAPTCHA
-const MAX_FREE_CAPTCHAS = 400;
-const FREE_CAPTCHA_PERIOD = 7 * 24 * 60 * 60 * 1000;
-const { v4: uuidv4 } = require('uuid'); // Cài đặt uuid để tạo khóa API duy nhất
-const apiKeys = {};
-const userSubscriptions = {};
 
 app.use(cors());
 app.use(express.json());
@@ -155,44 +150,6 @@ async function createCaptchaImageWithBackground(captchaText) {
     return canvas.toBuffer('image/png');
 }
 
-// Tạo API key mới
-app.get('/generate-api-key', (req, res) => {
-    const { discordId } = req.query; // Lấy discordId từ query string
-
-    if (!discordId) {
-        return res.status(400).json({ success: false, message: "Missing discordId" });
-    }
-
-    // Kiểm tra xem người dùng có gói trả phí không
-    const userSubscription = userSubscriptions[discordId] || 'free'; // Nếu không có gói thì mặc định là free
-
-    const apiKey = uuidv4(); // Tạo một API key duy nhất
-    apiKeys[discordId] = { apiKey, subscription: userSubscription };  // Lưu API key và gói cho discordId
-
-    return res.status(200).json({
-        success: true,
-        apiKey,
-        subscription: userSubscription // Trả về gói của người dùng
-    });
-});
-
-function checkApiKey(req, res, next) {
-    const apiKey = req.headers['x-api-key'];  // Lấy API key từ header
-
-    // Kiểm tra API key có hợp lệ không
-    if (!apiKey || !Object.values(apiKeys).some(item => item.apiKey === apiKey)) {
-        return res.status(401).json({ success: false, message: 'Invalid or missing API key' });
-    }
-
-    next(); // Tiến hành xử lý yêu cầu nếu API key hợp lệ
-}
-
-app.use(checkApiKey);
-
-app.get('/protected-data', (req, res) => {
-    res.status(200).json({ success: true, message: "Here is your protected data!" });
-});
-
 // Endpoint để lấy CAPTCHA hình ảnh
 app.get('/captcha-with-background', async (req, res) => {
     const { discordId } = req.query;
@@ -205,86 +162,42 @@ app.get('/captcha-with-background', async (req, res) => {
     const captchaText = generateCaptchaText();
     captchaStore[discordId] = captchaText;
     captchaExpiry[discordId] = Date.now() + CAPTCHA_TIMEOUT;
-    captchaAttempts[discordId] = (captchaAttempts[discordId] || 0) + 1;
+    captchaAttempts[discordId] = 0;
 
-    // Tạo CAPTCHA với hình nền ngẫu nhiên
-    try {
-        const imageBuffer = await createCaptchaImageWithBackground(captchaText);
-        res.writeHead(200, { 'Content-Type': 'image/png' });
-        res.end(imageBuffer);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, message: 'Error generating captcha' });
-    }
+    const captchaImage = await createCaptchaImageWithBackground(captchaText);
+
+    res.set('Content-Type', 'image/png');
+    res.send(captchaImage);
 });
 
-app.get('/captcha', (req, res) => {
-    const { discordId } = req.query;
-
-    if (!discordId) {
-        return res.status(400).json({ success: false, message: "Missing discordId" });
-    }
-
-    // Kiểm tra xem CAPTCHA có hết hạn hay không
-    if (captchaExpiry[discordId] && Date.now() > captchaExpiry[discordId]) {
-        delete captchaStore[discordId];  // Xóa CAPTCHA hết hạn
-        delete captchaAttempts[discordId];  // Reset số lần thử
-    }
-
-    // Kiểm tra nếu người dùng đã thử quá số lần cho phép
-    if (captchaAttempts[discordId] && captchaAttempts[discordId] >= MAX_ATTEMPTS) {
-        return res.status(400).json({ success: false, message: 'Too many attempts, please try again later.' });
-    }
-
-    const captchaText = generateCaptchaText();
-    captchaStore[discordId] = captchaText;
-    captchaExpiry[discordId] = Date.now() + CAPTCHA_TIMEOUT;
-    captchaAttempts[discordId] = (captchaAttempts[discordId] || 0) + 1;
-
-    const imageBuffer = createCaptchaImage(captchaText);
-    res.writeHead(200, { 'Content-Type': 'image/png' });
-    res.end(imageBuffer);
-});
-
+// Endpoint để kiểm tra CAPTCHA
 app.post('/verify-captcha', (req, res) => {
-    const { captcha, discordId } = req.body;
+    const { discordId, captchaText } = req.body;
 
-    if (!discordId || !captchaStore[discordId]) {
-        return res.status(400).json({ success: false, message: 'Invalid or expired CAPTCHA request' });
+    if (!discordId || !captchaText) {
+        return res.status(400).json({ success: false, message: "Missing discordId or captchaText" });
     }
 
-    // Kiểm tra CAPTCHA hết hạn
+    // Kiểm tra nếu CAPTCHA đã hết hạn
     if (Date.now() > captchaExpiry[discordId]) {
-        delete captchaStore[discordId];
-        delete captchaAttempts[discordId];
-        delete captchaExpiry[discordId];
-        return res.status(400).json({ success: false, message: 'Captcha has expired, please request a new one.' });
+        return res.status(400).json({ success: false, message: "Captcha expired" });
     }
 
-    if (captcha === captchaStore[discordId]) {
-        delete captchaStore[discordId]; // Xóa CAPTCHA sau khi xác minh thành công
-        // Lưu trạng thái CAPTCHA của người dùng đã được xác minh
-        captchaCompletedUsers.add(discordId); // Cập nhật trạng thái vào Set
-        return res.status(200).json({ success: true, message: 'Captcha verified successfully!' });
+    // Kiểm tra số lần thử CAPTCHA
+    if (captchaAttempts[discordId] >= MAX_ATTEMPTS) {
+        return res.status(400).json({ success: false, message: "Max attempts exceeded" });
+    }
+
+    // Kiểm tra CAPTCHA đã nhập
+    if (captchaText === captchaStore[discordId]) {
+        captchaCompletedUsers.add(discordId);
+        res.json({ success: true, message: "Captcha verified successfully" });
     } else {
-        return res.status(400).json({ success: false, message: 'Invalid captcha, please try again.' });
-    }
-});
-
-app.post('/check-captcha-status', (req, res) => {
-    const { discordId } = req.body;  // Nhận discordId từ thân yêu cầu
-
-    if (!discordId) {
-        return res.status(400).json({ success: false, message: 'discordId is required' });
-    }
-
-    if (captchaCompletedUsers.has(discordId)) {  // Kiểm tra nếu người dùng đã giải CAPTCHA
-        return res.status(200).json({ success: true, message: 'Captcha đã được giải.' });
-    } else {
-        return res.status(200).json({ success: false, message: 'Captcha chưa được giải.' });
+        captchaAttempts[discordId]++;
+        res.status(400).json({ success: false, message: "Incorrect captcha" });
     }
 });
 
 app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
+    console.log(`Server is running on port ${port}`);
 });

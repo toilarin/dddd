@@ -12,8 +12,13 @@ let captchaCompletedUsers = new Set();  // Sử dụng Set thay vì mảng để
 let captchaAttempts = {};  // Lưu trữ số lần thử CAPTCHA của người dùng
 let captchaExpiry = {};  // Lưu trữ thời gian hết hạn của CAPTCHA
 
-const CAPTCHA_TIMEOUT = 5 * 60 * 1000;  // Thời gian hết hạn 5 phút
+const CAPTCHA_TIMEOUT = 6 * 60 * 60 * 1000;  // Thời gian hết hạn 6 giờ
 const MAX_ATTEMPTS = 3;  // Giới hạn số lần thử CAPTCHA
+const MAX_FREE_CAPTCHAS = 400;
+const FREE_CAPTCHA_PERIOD = 7 * 24 * 60 * 60 * 1000;
+const { v4: uuidv4 } = require('uuid'); // Cài đặt uuid để tạo khóa API duy nhất
+const apiKeys = {};
+const userSubscriptions = {};
 
 app.use(cors());
 app.use(express.json());
@@ -149,6 +154,44 @@ async function createCaptchaImageWithBackground(captchaText) {
 
     return canvas.toBuffer('image/png');
 }
+
+// Tạo API key mới
+app.get('/generate-api-key', (req, res) => {
+    const { discordId } = req.query; // Lấy discordId từ query string
+
+    if (!discordId) {
+        return res.status(400).json({ success: false, message: "Missing discordId" });
+    }
+
+    // Kiểm tra xem người dùng có gói trả phí không
+    const userSubscription = userSubscriptions[discordId] || 'free'; // Nếu không có gói thì mặc định là free
+
+    const apiKey = uuidv4(); // Tạo một API key duy nhất
+    apiKeys[discordId] = { apiKey, subscription: userSubscription };  // Lưu API key và gói cho discordId
+
+    return res.status(200).json({
+        success: true,
+        apiKey,
+        subscription: userSubscription // Trả về gói của người dùng
+    });
+});
+
+function checkApiKey(req, res, next) {
+    const apiKey = req.headers['x-api-key'];  // Lấy API key từ header
+
+    // Kiểm tra API key có hợp lệ không
+    if (!apiKey || !Object.values(apiKeys).some(item => item.apiKey === apiKey)) {
+        return res.status(401).json({ success: false, message: 'Invalid or missing API key' });
+    }
+
+    next(); // Tiến hành xử lý yêu cầu nếu API key hợp lệ
+}
+
+app.use(checkApiKey);
+
+app.get('/protected-data', (req, res) => {
+    res.status(200).json({ success: true, message: "Here is your protected data!" });
+});
 
 // Endpoint để lấy CAPTCHA hình ảnh
 app.get('/captcha-with-background', async (req, res) => {
